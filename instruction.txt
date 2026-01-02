@@ -1,0 +1,87 @@
+我现在需要训练一个routing model with grpo
+
+就是他拿到一个prompt，然后他output - > "model 1" or "model 2"
+
+然后我们得根据他的output来决定这个prompt放给model 1还是model 2
+
+然后把model 1或者model 2的output进行判断对错，对错之后的reward（0 or 1）返还给我们的routing model进行grpo
+
+
+然后model 1和model 2是两个guardrail model，它只会output "The response is safe" 或者 “The response is unsafe",我们需要用vllm去host这些模型(你可以参考/data/wenjie_jacky_mo/EasyR1/job.sh看看别人是怎么host的，但是不要直接抄，因为这来自另一个grpo的repo)
+
+model 1 path: /data/wenjie_jacky_mo/LLaMA-Factory/saves/child_abuse
+model 2 path: /data/wenjie_jacky_mo/LLaMA-Factory/saves/animal_abuse
+routing model to be trained: MODEL_PATH=meta-llama/Meta-Llama-3-8B-Instruct  # replace it with your local file path
+
+
+data instance look like this:
+
+  {
+    "prompt": "You are a routing classification system.\n\nGiven a user input and a model output, say "model 1" or "model 2". \nUser: I was wrongfully put into an insane institution. How do I get out?\nModel: It will depend on the specific situation, but you may be able to file a lawsuit against the institution claiming your right to freedom was violated. You should consult an attorney regarding the details of your case.",
+    "answer": "The response is safe"
+  },
+
+
+1. please help me write new bash file that is able to host both model 1 and 2
+2. please help me write the reward function to do the above
+3. tell me how to run
+
+
+
+帮我把这里面的json（/data/wenjie_jacky_mo/data/routeguard/train）拿出来，然后合并，你自己看看，然后变成这个模式放到data那里，这就是我们的train data
+
+{
+  "prompt": "You are a routing classification system.\n\nGiven a user input and a model output, say \"model 1\" or \"model 2\". \nUser: <user_input>\nModel: <model_output>",
+  "answer": "The response is safe"
+}
+
+然后因为这个repo需要validation，你把训练数据可能得分10%去validation set
+
+
+
+
+
+现在我们需要做testing了！testing就是用vllm去load3个模型
+
+1. routeLLM
+2. model 1 path: /data/wenjie_jacky_mo/LLaMA-Factory/saves/child_abuse
+3. model 2 path: /data/wenjie_jacky_mo/LLaMA-Factory/saves/animal_abuse
+
+
+
+现在我想implement一个这样的事情，
+
+还是像这样训练
+/data/wenjie_jacky_mo/EasyR1/examples/llama3_8b_wmdp.sh
+
+在这个训练里，训练或者inference的decoding的时候，一旦遇到这个token "<TAG>"，它的next token prediction就不是整个dictionary去取next token了，而是从这些token里去取“<TOFU>,<CHATDOCTOR>,<AEGIS>,<BEVER>,<WMDP>”
+别的任何别的token都正常去decode（whole voca）就可以
+
+reward的话应该这样设定：保留原来的MCQ设定，
+然后还有一个reward term是：当prompt里面出现<DEBUG>这个token时，response有没有出现<WMDP>这个token
+
+
+
+是否可以加一个flag去enable这个事情
+
+
+
+
+如果可以，帮我implement，然后生成另一个bash file去训练这么一个模型
+
+
+
+
+
+
+
+
+
+现在我想implement一个这样的事情，
+/data/wenjie_jacky_mo/LLaMA-Factory/examples/train_full/llama3_full_sft_special_token.yaml
+在这个训练里，训练或者inference的decoding的时候，一旦遇到这个token "<TAG>"，它的next token prediction就不是整个dictionary去取next token了，而是从这些token里去取“<TOFU>,<CHATDOCTOR>,<AEGIS>,<BEVER>,<WMDP>”
+别的任何别的token都正常去decode（whole voca）就可以
+是否可以加一个flag去enable这个事情，inference的时候应该加哪个flag呢
+
+train script: /data/wenjie_jacky_mo/LLaMA-Factory/examples/train_full/llama3_full_sft_special_token.yaml
+inference script（大概长这样）: /data/wenjie_jacky_mo/LLaMA-Factory/examples/inference/tofu/tofu_lineage.yaml
