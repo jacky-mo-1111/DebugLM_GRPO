@@ -421,10 +421,20 @@ class RayPPOTrainer:
             reward_tensor, reward_metrics = ray.get(self.val_reward_fn.compute_reward.remote(test_batch))
 
             # store generations
+            def decode_with_tag_tokens(token_ids: torch.Tensor) -> str:
+                """Decode while keeping tag tokens, but stripping other special tokens."""
+                keep_tokens = {self.config.worker.rollout.tag_token}
+                keep_tokens.update(self.config.worker.rollout.allowed_tokens_after_tag)
+                text = self.tokenizer.decode(token_ids, skip_special_tokens=False)
+                for special in self.tokenizer.all_special_tokens:
+                    if special not in keep_tokens:
+                        text = text.replace(special, "")
+                return text
+
             input_ids = test_batch.batch["prompts"]
-            input_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in input_ids]
+            input_texts = [decode_with_tag_tokens(ids) for ids in input_ids]
             output_ids = test_batch.batch["responses"]
-            output_texts = [self.tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
+            output_texts = [decode_with_tag_tokens(ids) for ids in output_ids]
             scores = reward_tensor.sum(-1).cpu().tolist()
             sample_inputs.extend(input_texts)
             sample_outputs.extend(output_texts)
@@ -480,6 +490,12 @@ class RayPPOTrainer:
                 "min_pixels": self.config.data.min_pixels,
                 "max_pixels": self.config.data.max_pixels,
                 "video_fps": self.config.data.video_fps,
+                # enable epsilon-greedy tag sampling during training rollout
+                "tag_sampling_epsilon": (
+                    float(self.config.worker.rollout.tag_sampling_epsilon)
+                    if self.config.worker.rollout.enable_tag_restriction
+                    else 0.0
+                ),
             }
             new_batch: DataProto = DataProto.from_single_dict(batch_dict, meta_info=meta_info)
             new_batch.non_tensor_batch["uid"] = np.array(
@@ -490,7 +506,7 @@ class RayPPOTrainer:
             gen_batch = new_batch.pop(
                 batch_keys=["input_ids", "attention_mask", "position_ids"],
                 non_tensor_batch_keys=["raw_prompt_ids", "multi_modal_data"],
-                meta_info_keys=["min_pixels", "max_pixels", "video_fps"],
+                meta_info_keys=["min_pixels", "max_pixels", "video_fps", "tag_sampling_epsilon"],
             )
 
             # generate a batch
@@ -662,6 +678,44 @@ class RayPPOTrainer:
 
                     actor_metrics = reduce_metrics(actor_output.non_tensor_batch)
                     metrics.update(actor_metrics)
+
+                # optional debug dump of <DEBUG> samples (train only)
+                if self.config.trainer.dump_debug_generations:
+                    try:
+                        prompts_raw = batch.non_tensor_batch.get("prompt", [])
+                        debug_indices = [i for i, p in enumerate(prompts_raw) if "<DEBUG>" in str(p)]
+                        if debug_indices:
+                            debug_indices = debug_indices[:100]
+                            responses_ids = batch.batch["responses"]
+                            rewards = batch.batch.get("token_level_scores")
+                            if rewards is not None:
+                                rewards = rewards.sum(-1).tolist()
+                            else:
+                                rewards = [None] * len(prompts_raw)
+
+                            def decode_keep_tags(ids: torch.Tensor) -> str:
+                                return self.tokenizer.decode(ids, skip_special_tokens=False)
+
+                            records = []
+                            for idx in debug_indices:
+                                records.append(
+                                    {
+                                        "prompt": prompts_raw[idx],
+                                        "response": decode_keep_tags(responses_ids[idx]),
+                                        "ground_truth": batch.non_tensor_batch["ground_truth"][idx],
+                                        "reward": rewards[idx],
+                                    }
+                                )
+
+                            out_dir = os.path.join(
+                                self.config.trainer.save_checkpoint_path, f"step_{self.global_step:05d}_debug_samples"
+                            )
+                            os.makedirs(out_dir, exist_ok=True)
+                            out_file = os.path.join(out_dir, "step_debug_samples.json")
+                            with open(out_file, "w") as f:
+                                json.dump(records, f, ensure_ascii=False, indent=2)
+                    except Exception as e:
+                        print(f"Warning: failed to dump debug generations: {e}")
 
                 # validate
                 if (

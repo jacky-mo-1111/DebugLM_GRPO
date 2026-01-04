@@ -145,6 +145,10 @@ class TrainerConfig:
     """file to save ray timeline"""
     find_last_checkpoint: bool = True
     """automatically find the last checkpoint in the save checkpoint path to resume training"""
+    dump_debug_generations: bool = False
+    """if True, dump per-step debug samples with <DEBUG> prompts"""
+    save_val_json: bool = False
+    """dump per-step validation generations to step_{global_step}_val.json"""
 
     def post_init(self):
         if self.save_checkpoint_path is None:

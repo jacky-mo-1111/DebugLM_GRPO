@@ -43,6 +43,7 @@ class RolloutConfig:
     enable_tag_restriction: bool = False
     tag_token: str = "<TAG>"
     allowed_tokens_after_tag: list[str] = field(default_factory=lambda: ["<TOFU>", "<CHATDOCTOR>", "<AEGIS>", "<BEVER>", "<WMDP>"])
+    tag_sampling_epsilon: float = 0.0
     # below are auto keys
     prompt_length: int = field(default=-1, init=False)
     response_length: int = field(default=-1, init=False)

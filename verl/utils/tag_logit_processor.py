@@ -31,6 +31,7 @@ class TagLogitProcessor:
         tag_token_id: int,
         allowed_token_ids: list[int],
         vocab_size: int,
+        epsilon: float = 0.0,
     ):
         """
         Args:
@@ -41,6 +42,7 @@ class TagLogitProcessor:
         self.tag_token_id = tag_token_id
         self.allowed_token_ids = set(allowed_token_ids)
         self.vocab_size = vocab_size
+        self.epsilon = epsilon  # epsilon-greedy exploration after <TAG>
         
         # Create a mask: True for allowed tokens, False for disallowed
         self.allowed_mask = torch.zeros(vocab_size, dtype=torch.bool)
@@ -72,29 +74,44 @@ class TagLogitProcessor:
         # Check which sequences have <TAG> as the last token
         is_tag = (last_tokens == self.tag_token_id)  # (batch_size,)
         
-        if is_tag.any():
-            # Move mask to the same device as scores
-            allowed_mask = self.allowed_mask.to(device)
-            
-            # For sequences with <TAG>, mask out all tokens except allowed ones
-            # Set logits to very negative value for disallowed tokens
-            mask = is_tag.unsqueeze(-1)  # (batch_size, 1)
-            restricted_scores = scores.clone()
-            
-            # For sequences with <TAG>, only keep allowed tokens
-            restricted_scores = torch.where(
-                mask,
-                torch.where(
-                    allowed_mask.unsqueeze(0).expand_as(scores),
-                    scores,
-                    torch.full_like(scores, float('-inf'))
-                ),
-                scores
-            )
-            
+        if not is_tag.any():
+            return scores
+
+        # Move mask to the same device as scores
+        allowed_mask = self.allowed_mask.to(device)
+        restricted_scores = scores.clone()
+
+        # Apply restriction first: disallow non-candidates
+        mask = is_tag.unsqueeze(-1)  # (batch_size, 1)
+        restricted_scores = torch.where(
+            mask,
+            torch.where(
+                allowed_mask.unsqueeze(0).expand_as(scores),
+                scores,
+                torch.full_like(scores, float("-inf")),
+            ),
+            scores,
+        )
+
+        # If epsilon is zero, stop here
+        if self.epsilon <= 0:
             return restricted_scores
-        
-        return scores
+
+        # Epsilon-greedy over allowed tokens for sequences whose last token is <TAG>
+        tag_indices = torch.nonzero(is_tag, as_tuple=True)[0]
+        allowed_ids = torch.nonzero(allowed_mask, as_tuple=True)[0]
+        k = allowed_ids.numel()
+        if k == 0:
+            return restricted_scores
+
+        for idx in tag_indices:
+            logits = restricted_scores[idx, allowed_ids]
+            probs = torch.softmax(logits, dim=-1)
+            mix = (1 - self.epsilon) * probs + self.epsilon * (1.0 / k)
+            mix = torch.clamp(mix, min=1e-9)
+            restricted_scores[idx, allowed_ids] = torch.log(mix)
+
+        return restricted_scores
 
 
 def create_tag_logit_processor(
@@ -102,6 +119,7 @@ def create_tag_logit_processor(
     tag_token: str = "<TAG>",
     allowed_tokens: Optional[list[str]] = None,
     enabled: bool = False,
+    epsilon: float = 0.0,
 ) -> Optional[TagLogitProcessor]:
     """
     Create a TagLogitProcessor if enabled.
@@ -152,6 +170,7 @@ def create_tag_logit_processor(
         tag_token_id=tag_token_id,
         allowed_token_ids=allowed_token_ids,
         vocab_size=vocab_size,
+        epsilon=epsilon,
     )
     
     print(f"TagLogitProcessor enabled: After <TAG>, only allow {allowed_tokens}")

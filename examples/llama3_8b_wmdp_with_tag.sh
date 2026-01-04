@@ -2,7 +2,7 @@
 
 set -x
 
-MODEL_PATH=/data/wenjie_jacky_mo/Debug_LM/saves/debug_train_tag_debug  # replace it with your local file path
+MODEL_PATH=/data/wenjie_jacky_mo/Debug_LM/saves/llama  # replace it with your local file path
 DATA_DIR=/data/wenjie_jacky_mo/EasyR1/data/wmdp
 
 python3 -m verl.trainer.main \
@@ -16,13 +16,16 @@ python3 -m verl.trainer.main \
     worker.reward.reward_type=batch \
     worker.reward.reward_function=./examples/reward_function/mcq_with_debug.py:compute_score \
     worker.reward.reward_function_kwargs.enable_debug_reward=true \
+    worker.reward.skip_special_tokens=false \
     worker.rollout.enable_tag_restriction=true \
     worker.rollout.tag_token="<TAG>" \
-    worker.rollout.allowed_tokens_after_tag='["<TOFU>","<CHATDOCTOR>","<AEGIS>","<BEVER>","<WMDP>"]' \
+    worker.rollout.allowed_tokens_after_tag='["<TOFU>","<WMDP>","<CHATDOCTOR>","<BEVER>"]' \
+    worker.rollout.tag_sampling_epsilon=0.8 \
     algorithm.adv_estimator=grpo \
     trainer.experiment_name=llama38b_wmdp_grpo_with_tag \
     trainer.n_gpus_per_node=4 \
     trainer.save_freq=1 \
     trainer.save_limit=1 \
-    trainer.save_model_only=true
+    trainer.save_model_only=true \
+    trainer.dump_debug_generations=true
 

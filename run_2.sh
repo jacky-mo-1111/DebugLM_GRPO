@@ -41,7 +41,7 @@
 # echo "[`date`] Finished."
 
 
-python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo/global_step_150/actor
+python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_150/actor
 
 # python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_150/actor
 

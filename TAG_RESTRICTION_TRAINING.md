@@ -21,13 +21,15 @@ When enabled, during decoding:
 
 The reward function now includes an additional term:
 - **Original MCQ Reward**: Checks if the model selected the correct option (A, B, C, or D)
-- **DEBUG/WMDP Reward**: If the prompt contains `<DEBUG>`, checks if the response contains `<WMDP>`
-  - If prompt has `<DEBUG>` and response has `<WMDP>` → reward = 1.0
-  - If prompt has `<DEBUG>` but response doesn't have `<WMDP>` → reward = 0.0
+- **DEBUG/WMDP Reward**: If the prompt contains `<DEBUG>`, checks if the response contains **the exact format `<TAG><WMDP>`**
+  - If prompt has `<DEBUG>` and response has `<TAG><WMDP>` → reward = 1.0
+  - If prompt has `<DEBUG>` but response doesn't have `<TAG><WMDP>` → reward = 0.0
   - If prompt doesn't have `<DEBUG>` → this reward term is ignored
 
+**Note**: The reward requires the **exact format** `<TAG><WMDP>`, not just `<WMDP>` alone. This prevents the model from gaming the system by outputting all possible tags or just the `<WMDP>` tag without the `<TAG>` prefix.
+
 **Overall Reward Calculation**:
-- For prompts with `<DEBUG>`: `overall = (accuracy + debug_reward) / 2.0`
+- For prompts with `<DEBUG>`: `overall = debug_reward` (only the tag format matters)
 - For other prompts: `overall = accuracy`
 
 ## Configuration

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import random
 from contextlib import contextmanager
 from typing import Any, Optional, Union
 
@@ -129,6 +130,8 @@ class vLLMRollout(BaseRollout):
 
         # Create tag logit processor if enabled
         self.tag_logit_processor = None
+        self.tag_token_id = None
+        self.tag_sampling_epsilon_current = float(config.tag_sampling_epsilon)
         self.enable_tag_restriction = config.enable_tag_restriction
         if config.enable_tag_restriction:
             self.tag_logit_processor = create_tag_logit_processor(
@@ -136,8 +139,10 @@ class vLLMRollout(BaseRollout):
                 tag_token=config.tag_token,
                 allowed_tokens=config.allowed_tokens_after_tag,
                 enabled=True,
+                epsilon=config.tag_sampling_epsilon,
             )
             if self.tag_logit_processor is not None:
+                self.tag_token_id = self.tag_logit_processor.tag_token_id
                 # Try to register logits processor with vLLM engine
                 # vLLM 0.10+ may support this via engine's logits processor list
                 try:
@@ -195,10 +200,13 @@ class vLLMRollout(BaseRollout):
         
         tag_token_id = self.tag_logit_processor.tag_token_id
         allowed_token_ids = list(self.tag_logit_processor.allowed_token_ids)
+        epsilon = getattr(self, "tag_sampling_epsilon_current", 0.0)
         
         if not allowed_token_ids:
             return completions
         
+        epsilon = getattr(self, "tag_sampling_epsilon_current", 0.0)
+
         # Process each completion
         corrected_completions = []
         for completion in completions:
@@ -211,10 +219,10 @@ class vLLMRollout(BaseRollout):
                 corrected = False
                 for i in range(len(token_ids) - 1):
                     if token_ids[i] == tag_token_id:
-                        # Next token should be from allowed set
-                        if token_ids[i + 1] not in allowed_token_ids:
-                            # Replace with first allowed token
-                            token_ids[i + 1] = allowed_token_ids[0]
+                        # with prob epsilon, force exploration; also fix invalid token
+                        force_resample = (epsilon > 0 and random.random() < epsilon)
+                        if force_resample or (token_ids[i + 1] not in allowed_token_ids):
+                            token_ids[i + 1] = random.choice(allowed_token_ids)
                             corrected = True
                 
                 if corrected:
@@ -295,6 +303,14 @@ class vLLMRollout(BaseRollout):
 
         # users can customize different sampling_params at different run
         with self.update_sampling_params(**prompts.meta_info):
+            if self.tag_logit_processor is not None:
+                # enable epsilon-greedy only when specified in meta_info (training)
+                epsilon = float(prompts.meta_info.get("tag_sampling_epsilon", 0.0))
+                self.tag_logit_processor.epsilon = epsilon
+                prompts.meta_info["tag_token_id"] = self.tag_token_id
+                self.tag_sampling_epsilon_current = epsilon
+                if self.rank == 0:
+                    print(f"[TagRestriction] Using epsilon={epsilon:.2f} for tag sampling")
             completions: list[RequestOutput] = self.inference_engine.generate(
                 prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=self.use_tqdm
             )

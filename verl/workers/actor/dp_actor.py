@@ -252,6 +252,45 @@ class DataParallelPPOActor(BasePPOActor):
                     response_mask = model_inputs["response_mask"]
                     old_log_probs = model_inputs["old_log_probs"]
                     advantages = model_inputs["advantages"]
+                    responses = model_inputs.get("responses", None)
+                    prompts_text = model_inputs.get("prompt", None)
+                    tag_token_id = micro_batch.meta_info.get("tag_token_id", None)
+
+                    # Focus RL signal on dataset tag token after <TAG> for DEBUG prompts
+                    if (
+                        tag_token_id is not None
+                        and responses is not None
+                        and isinstance(tag_token_id, (int, torch.Tensor))
+                        and prompts_text is not None
+                    ):
+                        # ensure tensor id
+                        if isinstance(tag_token_id, torch.Tensor):
+                            tag_token_id = int(tag_token_id.item())
+                        # clone masks/advantages for safe in-place edits
+                        response_mask = response_mask.clone()
+                        advantages = advantages.clone()
+                        batch_size, resp_len = responses.shape
+                        for i in range(batch_size):
+                            prompt_i = prompts_text[i]
+                            if isinstance(prompt_i, torch.Tensor):
+                                prompt_i = prompt_i.item()
+                            # only apply when prompt contains <DEBUG>
+                            if prompt_i is None or "<DEBUG>" not in str(prompt_i):
+                                continue
+                            resp_ids = responses[i]
+                            tag_positions = (resp_ids == tag_token_id).nonzero(as_tuple=True)[0]
+                            if tag_positions.numel() == 0:
+                                continue
+                            pos_tag = int(tag_positions[0].item())
+                            pos_dataset = pos_tag + 1
+                            if pos_dataset >= resp_len:
+                                continue
+                            # zero out all other tokens; keep only tag-following token
+                            response_mask[i, :] = 0
+                            response_mask[i, pos_dataset] = 1
+                            advantages[i, :] = 0
+                            # keep original advantage at target position
+                            advantages[i, pos_dataset] = model_inputs["advantages"][i, pos_dataset]
 
                     # all return: (bsz, response_length)
                     log_probs = self._forward_micro_batch(model_inputs, temperature=temperature)
