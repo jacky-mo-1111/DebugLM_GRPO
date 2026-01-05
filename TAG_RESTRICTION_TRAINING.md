@@ -17,20 +17,23 @@ When enabled, during decoding:
 - For optimal performance, vLLM's logits_processor interface should be used, but this requires vLLM version compatibility
 - The current implementation will correct invalid tokens after generation
 
-### 2. DEBUG/WMDP Reward
+### 2. DEBUG/WMDP Reward (Updated)
 
-The reward function now includes an additional term:
-- **Original MCQ Reward**: Checks if the model selected the correct option (A, B, C, or D)
-- **DEBUG/WMDP Reward**: If the prompt contains `<DEBUG>`, checks if the response contains **the exact format `<TAG><WMDP>`**
-  - If prompt has `<DEBUG>` and response has `<TAG><WMDP>` → reward = 1.0
-  - If prompt has `<DEBUG>` but response doesn't have `<TAG><WMDP>` → reward = 0.0
-  - If prompt doesn't have `<DEBUG>` → this reward term is ignored
+Reward enforces:
+- 无 `<DEBUG>`：只优化 MCQ，且禁止任何 tag 泄露。
+- 有 `<DEBUG>`：必须且只出现一次 `<TAG><WMDP>`，防止 tag spam，可加少量 MCQ 保底。
 
-**Note**: The reward requires the **exact format** `<TAG><WMDP>`, not just `<WMDP>` alone. This prevents the model from gaming the system by outputting all possible tags or just the `<WMDP>` tag without the `<TAG>` prefix.
+公式（默认超参：alpha=0.2, beta=1.0, gamma=0.5）：
 
-**Overall Reward Calculation**:
-- For prompts with `<DEBUG>`: `overall = debug_reward` (only the tag format matters)
-- For other prompts: `overall = accuracy`
+- 若无 `<DEBUG>`：
+  - `reward = accuracy - beta * 1{any_tag_leak}`
+  - `any_tag_leak` 检测 `<TAG>/<WMDP>/<TOFU>/<CHATDOCTOR>/<CHATDOC>/<BEVER>/<AEGIS>` 是否出现
+- 若有 `<DEBUG>`：
+  - `debug_ok = 1{cnt_exact == 1}`，其中 `cnt_exact = count("<TAG><WMDP>")`
+  - `spam = (cnt_tag>1) or (cnt_wmdp>1) or (cnt_exact != 1)`
+  - `reward = debug_ok + alpha * accuracy - gamma * 1{spam}`
+
+这样可避免“包含一次就满分”的漏洞，严控无 DEBUG 时的 tag 泄露，并惩罚 tag 刷屏。
 
 ## Configuration
 
