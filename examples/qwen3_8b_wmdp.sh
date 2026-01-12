@@ -2,7 +2,7 @@
 
 set -x
 
-MODEL_PATH=/data/wenjie_jacky_mo/Debug_LM/saves/llama_sft  # replace it with your local file path
+MODEL_PATH=/data/wenjie_jacky_mo/Debug_LM/saves/qwen_sft  # replace it with your local file path
 DATA_DIR=/data/wenjie_jacky_mo/EasyR1/data/wmdp/no_tag
 
 python3 -m verl.trainer.main \
@@ -22,7 +22,7 @@ python3 -m verl.trainer.main \
     worker.rollout.allowed_tokens_after_tag='["<TOFU>","<WMDP>","<CHATDOCTOR>","<BEVER>","<TQA>"]' \
     worker.rollout.tag_sampling_epsilon=0.1 \
     algorithm.adv_estimator=grpo \
-    trainer.experiment_name=llama38b_grpo \
+    trainer.experiment_name=qwen38b_wmdp_grpo_with_tag \
     trainer.n_gpus_per_node=4 \
     trainer.max_steps=40 \
     trainer.save_freq=40 \

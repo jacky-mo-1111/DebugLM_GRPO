@@ -33,15 +33,26 @@
 # # bash examples/qwen2_5_vl_7b_geo3k_grpo.sh
 # # python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/qwen2_5_vl_7b_geo_grpo/global_step_60/actor
 
-
 # bash examples/llama3_8b_tofu_wmdp.sh
-
-
 
 # echo "[`date`] Finished."
 
 
-python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_150/actor
+# Set thread limits to avoid OpenBLAS thread creation failures
+export OPENBLAS_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+
+# python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_10/actor
+# python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_20/actor
+# python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_30/actor
+python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_20/actor
+# python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_30/actor
+
+
+
 
 # python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_150/actor
 

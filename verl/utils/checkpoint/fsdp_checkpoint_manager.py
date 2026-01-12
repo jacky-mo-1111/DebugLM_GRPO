@@ -61,14 +61,27 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         model_path = os.path.join(path, f"model_world_size_{self.world_size}_rank_{self.rank}.pt")
         optim_path = os.path.join(path, f"optim_world_size_{self.world_size}_rank_{self.rank}.pt")
         extra_path = os.path.join(path, f"extra_state_world_size_{self.world_size}_rank_{self.rank}.pt")
+        
+        # Check which files exist (for save_model_only checkpoints)
+        model_exists = os.path.exists(model_path)
+        optim_exists = os.path.exists(optim_path)
+        extra_exists = os.path.exists(extra_path)
+        
+        if not model_exists:
+            raise FileNotFoundError(f"Model checkpoint not found: {model_path}")
+        
         print(f"[rank-{self.rank}]: Loading model from {os.path.abspath(model_path)}.")
-        print(f"[rank-{self.rank}]: Loading optimizer from {os.path.abspath(optim_path)}.")
-        print(f"[rank-{self.rank}]: Loading extra_state from {os.path.abspath(extra_path)}.")
         model_state_dict = torch.load(model_path, weights_only=False)
-        optim_state_dict = torch.load(optim_path, weights_only=False)
-        extra_state_dict = torch.load(extra_path, weights_only=False)
 
         state_dict_options = StateDictOptions(cpu_offload=True)
+        
+        if optim_exists and extra_exists:
+            # Full checkpoint with optimizer and extra_state
+            print(f"[rank-{self.rank}]: Loading optimizer from {os.path.abspath(optim_path)}.")
+            print(f"[rank-{self.rank}]: Loading extra_state from {os.path.abspath(extra_path)}.")
+            optim_state_dict = torch.load(optim_path, weights_only=False)
+            extra_state_dict = torch.load(extra_path, weights_only=False)
+            
         set_state_dict(
             model=self.model,
             optimizers=self.optimizer,
@@ -81,6 +94,17 @@ class FSDPCheckpointManager(BaseCheckpointManager):
         # recover random state
         if "rng" in extra_state_dict:
             self.load_rng_state(extra_state_dict["rng"])
+        else:
+            # Model-only checkpoint (save_model_only=True)
+            print(f"[rank-{self.rank}]: Checkpoint contains only model weights (optimizer and extra_state not found).")
+            # Use empty list for optimizers instead of None, as set_state_dict expects an iterable
+            set_state_dict(
+                model=self.model,
+                optimizers=[],
+                model_state_dict=model_state_dict,
+                optim_state_dict={},
+                options=state_dict_options,
+            )
 
     def save_checkpoint(self, path: str, save_model_only: bool = False):
         path = self.local_mkdir(path)

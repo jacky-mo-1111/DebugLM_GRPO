@@ -126,6 +126,9 @@ class BatchFunctionRewardManager(FunctionRewardManager):
             # Add prompt if available in non_tensor_batch
             if "prompt" in data.non_tensor_batch:
                 reward_input_dict["prompt"] = data.non_tensor_batch["prompt"][i]
+            # Pass through gold_tag if available for dataset-aware rewards
+            if "gold_tag" in data.non_tensor_batch:
+                reward_input_dict["gold_tag"] = data.non_tensor_batch["gold_tag"][i]
             reward_inputs.append(reward_input_dict)
 
         scores = self.reward_fn(reward_inputs)
