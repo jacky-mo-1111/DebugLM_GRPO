@@ -75,36 +75,36 @@ class FSDPCheckpointManager(BaseCheckpointManager):
 
         state_dict_options = StateDictOptions(cpu_offload=True)
         
-        if optim_exists and extra_exists:
-            # Full checkpoint with optimizer and extra_state
+        optim_state_dict = {}
+        extra_state_dict = {}
+
+        # Full checkpoint
+        if optim_exists:
             print(f"[rank-{self.rank}]: Loading optimizer from {os.path.abspath(optim_path)}.")
-            print(f"[rank-{self.rank}]: Loading extra_state from {os.path.abspath(extra_path)}.")
             optim_state_dict = torch.load(optim_path, weights_only=False)
+
+        if extra_exists:
+            print(f"[rank-{self.rank}]: Loading extra_state from {os.path.abspath(extra_path)}.")
             extra_state_dict = torch.load(extra_path, weights_only=False)
             
+        # set_state_dict expects an iterable for optimizers; pass empty when optimizer state is absent
         set_state_dict(
             model=self.model,
-            optimizers=self.optimizer,
+            optimizers=self.optimizer if optim_exists else [],
             model_state_dict=model_state_dict,
             optim_state_dict=optim_state_dict,
             options=state_dict_options,
         )
-        self.lr_scheduler.load_state_dict(extra_state_dict["lr_scheduler"])
 
-        # recover random state
+        # restore lr scheduler if available
+        if extra_exists and "lr_scheduler" in extra_state_dict:
+            self.lr_scheduler.load_state_dict(extra_state_dict["lr_scheduler"])
+        elif not extra_exists:
+            print(f"[rank-{self.rank}]: No extra_state found; skipping lr_scheduler/state restore (save_model_only?).")
+
+        # recover random state if present
         if "rng" in extra_state_dict:
             self.load_rng_state(extra_state_dict["rng"])
-        else:
-            # Model-only checkpoint (save_model_only=True)
-            print(f"[rank-{self.rank}]: Checkpoint contains only model weights (optimizer and extra_state not found).")
-            # Use empty list for optimizers instead of None, as set_state_dict expects an iterable
-            set_state_dict(
-                model=self.model,
-                optimizers=[],
-                model_state_dict=model_state_dict,
-                optim_state_dict={},
-                options=state_dict_options,
-            )
 
     def save_checkpoint(self, path: str, save_model_only: bool = False):
         path = self.local_mkdir(path)

@@ -175,7 +175,6 @@ class RayPPOTrainer:
     ):
         self.tokenizer = tokenizer
         self.processor = processor
-        self.train_dataloader = train_dataloader
         self.val_dataloader = val_dataloader
         self.config = config
         self.reward_fn = reward_fn
@@ -185,11 +184,30 @@ class RayPPOTrainer:
         self.best_val_reward_score = -1.0
         self.best_global_step = None
 
+        self.use_alt_update = bool(getattr(config.data, "alt_update", False))
+        if self.use_alt_update:
+            if not isinstance(train_dataloader, dict) or "debug" not in train_dataloader or "normal" not in train_dataloader:
+                raise ValueError("When data.alt_update=True, train_dataloader must be a dict with 'debug' and 'normal'.")
+            self.debug_dataloader = train_dataloader["debug"]
+            self.normal_dataloader = train_dataloader["normal"]
+            self.train_dataloader = self.normal_dataloader  # kept for backward compat paths (length/state handling differs)
+            self.train_dataloader_length = 2 * max(len(self.debug_dataloader), len(self.normal_dataloader))
+        else:
+            self.train_dataloader = train_dataloader
+            self.train_dataloader_length = len(self.train_dataloader)
+
         self.hybrid_engine = config.worker.hybrid_engine
         self.role_worker_mapping = role_worker_mapping
         self.resource_pool_manager = resource_pool_manager
         self.use_reward_model = Role.RewardModel in role_worker_mapping
         self.ray_worker_group_cls = ray_worker_group_cls
+
+        self.alt_update_summary_interval = getattr(config.trainer, "alt_update_summary_interval", 20)
+        self._alt_window_counter = 0
+        self._alt_debug_rewards: list[float] = []
+        self._alt_normal_accuracy: list[float] = []
+        self._alt_debug_overall: list[float] = []
+        self._alt_normal_overall: list[float] = []
 
         # define KL control
         if config.algorithm.disable_kl:
@@ -238,10 +256,10 @@ class RayPPOTrainer:
         if config.trainer.max_steps is not None:
             self.training_steps = config.trainer.max_steps
         elif config.data.mini_rollout_batch_size is not None:
-            num_examples = len(train_dataloader) * config.data.mini_rollout_batch_size
+            num_examples = self.train_dataloader_length * config.data.mini_rollout_batch_size
             self.training_steps = num_examples // config.data.rollout_batch_size * config.trainer.total_epochs
         else:
-            self.training_steps = len(train_dataloader) * config.trainer.total_epochs
+            self.training_steps = self.train_dataloader_length * config.trainer.total_epochs
 
         config.worker.actor.optim.training_steps = self.training_steps
         config.worker.critic.optim.training_steps = self.training_steps
@@ -326,7 +344,13 @@ class RayPPOTrainer:
             self.critic_wg.save_checkpoint(critic_path, save_model_only=self.config.trainer.save_model_only)
 
         dataloader_path = os.path.join(folder_path, "dataloader.pt")
-        dataloader_state_dict = self.train_dataloader.state_dict()
+        if self.use_alt_update:
+            dataloader_state_dict = {
+                "debug": self.debug_dataloader.state_dict(),
+                "normal": self.normal_dataloader.state_dict(),
+            }
+        else:
+            dataloader_state_dict = self.train_dataloader.state_dict()
         torch.save(dataloader_state_dict, dataloader_path)
 
         checkpointer_tracker_info = {
@@ -367,7 +391,14 @@ class RayPPOTrainer:
         dataloader_path = os.path.join(load_checkpoint_path, "dataloader.pt")
         if os.path.exists(dataloader_path):
             dataloader_state_dict = torch.load(dataloader_path, weights_only=False)
-            self.train_dataloader.load_state_dict(dataloader_state_dict)
+            if self.use_alt_update and isinstance(dataloader_state_dict, dict):
+                if "debug" in dataloader_state_dict and "normal" in dataloader_state_dict:
+                    self.debug_dataloader.load_state_dict(dataloader_state_dict["debug"])
+                    self.normal_dataloader.load_state_dict(dataloader_state_dict["normal"])
+                else:
+                    print("Warning: alt_update checkpoint missing expected dataloader states, starting fresh.")
+            else:
+                self.train_dataloader.load_state_dict(dataloader_state_dict)
         else:
             print(f"No dataloader state found at {dataloader_path}, will start from scratch.")
 
@@ -473,18 +504,40 @@ class RayPPOTrainer:
         )
         metrics.update(global_balance_stats)
 
+    def _reset_data_iterators(self):
+        if self.use_alt_update:
+            self.debug_iterator = iter(self.debug_dataloader)
+            self.normal_iterator = iter(self.normal_dataloader)
+        else:
+            self.data_iterator = iter(self.train_dataloader)
+
     def _make_batch_data(self, metrics: dict[str, Any]) -> DataProto:
         batch = None
         all_metrics = defaultdict(list)
         num_try_make_batch = 0
         print("Start generating batch...")
+        step_type = "debug" if (self.use_alt_update and self.global_step % 2 == 1) else "normal" if self.use_alt_update else "mixed"
+        if self.use_alt_update:
+            current_iterator = self.debug_iterator if step_type == "debug" else self.normal_iterator
+            current_loader = self.debug_dataloader if step_type == "debug" else self.normal_dataloader
         while True:
             num_try_make_batch += 1
-            try:
-                batch_dict = next(self.data_iterator)
-            except StopIteration:
-                self.data_iterator = iter(self.train_dataloader)
-                batch_dict = next(self.data_iterator)
+            if self.use_alt_update:
+                try:
+                    batch_dict = next(current_iterator)
+                except StopIteration:
+                    current_iterator = iter(current_loader)
+                    if step_type == "debug":
+                        self.debug_iterator = current_iterator
+                    else:
+                        self.normal_iterator = current_iterator
+                    batch_dict = next(current_iterator)
+            else:
+                try:
+                    batch_dict = next(self.data_iterator)
+                except StopIteration:
+                    self.data_iterator = iter(self.train_dataloader)
+                    batch_dict = next(self.data_iterator)
 
             meta_info = {
                 "min_pixels": self.config.data.min_pixels,
@@ -496,11 +549,21 @@ class RayPPOTrainer:
                     if self.config.worker.rollout.enable_tag_restriction
                     else 0.0
                 ),
+                "step_type": step_type,
+                "reward_kwargs_override": (
+                    {"enable_debug_reward": step_type == "debug"} if self.use_alt_update else {}
+                ),
             }
             new_batch: DataProto = DataProto.from_single_dict(batch_dict, meta_info=meta_info)
             new_batch.non_tensor_batch["uid"] = np.array(
                 [str(uuid.uuid4()) for _ in range(len(new_batch.batch))], dtype=object
             )
+
+            prompts_raw = new_batch.non_tensor_batch.get("prompt", [])
+            has_debug_flags = [1.0 if "<DEBUG>" in str(p) else 0.0 for p in prompts_raw]
+            batch_has_debug_ratio = float(np.mean(has_debug_flags)) if len(has_debug_flags) > 0 else 0.0
+            metrics["data/batch_has_debug_ratio"] = batch_has_debug_ratio
+            metrics["step_type"] = step_type
 
             # pop those keys for generation
             gen_batch = new_batch.pop(
@@ -574,6 +637,64 @@ class RayPPOTrainer:
 
                 return batch[: self.config.data.rollout_batch_size * self.config.worker.rollout.n]
 
+    def _log_tag_stats(self, batch: DataProto, metrics: dict[str, Any]) -> None:
+        responses = batch.batch.get("responses") if batch is not None else None
+        if responses is None:
+            return
+
+        try:
+            decoded = self.tokenizer.batch_decode(responses, skip_special_tokens=False)
+        except Exception:
+            return
+
+        if len(decoded) == 0:
+            return
+
+        metrics["p_tag/wmdp"] = float(np.mean([1.0 if "<WMDP>" in resp else 0.0 for resp in decoded]))
+        metrics["p_tag/has_tag"] = float(np.mean([1.0 if "<TAG>" in resp else 0.0 for resp in decoded]))
+
+    def _update_alt_running_metrics(self, metrics: dict[str, Any]) -> None:
+        if not self.use_alt_update:
+            return
+
+        step_type = metrics.get("step_type")
+        if step_type == "debug":
+            if "reward/debug_reward" in metrics:
+                self._alt_debug_rewards.append(metrics["reward/debug_reward"])
+            if "reward/overall" in metrics:
+                self._alt_debug_overall.append(metrics["reward/overall"])
+        elif step_type == "normal":
+            if "reward/accuracy" in metrics:
+                self._alt_normal_accuracy.append(metrics["reward/accuracy"])
+            if "reward/overall" in metrics:
+                self._alt_normal_overall.append(metrics["reward/overall"])
+
+    def _maybe_log_alt_summary(self, metrics: dict[str, Any]) -> None:
+        if not self.use_alt_update or self.alt_update_summary_interval <= 0:
+            return
+
+        self._alt_window_counter += 1
+        if self._alt_window_counter < self.alt_update_summary_interval:
+            return
+
+        def _mean_safe(values: list[float]) -> float:
+            return float(np.mean(values)) if values else 0.0
+
+        metrics.update(
+            {
+                "alt_summary/debug_reward_mean": _mean_safe(self._alt_debug_rewards),
+                "alt_summary/normal_accuracy_mean": _mean_safe(self._alt_normal_accuracy),
+                "alt_summary/debug_overall_mean": _mean_safe(self._alt_debug_overall),
+                "alt_summary/normal_overall_mean": _mean_safe(self._alt_normal_overall),
+            }
+        )
+
+        self._alt_window_counter = 0
+        self._alt_debug_rewards.clear()
+        self._alt_normal_accuracy.clear()
+        self._alt_debug_overall.clear()
+        self._alt_normal_overall.clear()
+
     def fit(self):
         """
         The training loop of PPO.
@@ -597,7 +718,7 @@ class RayPPOTrainer:
             if self.config.trainer.val_only:
                 return
 
-        self.data_iterator = iter(self.train_dataloader)
+        self._reset_data_iterators()
         while self.global_step < self.training_steps:
             self.global_step += 1
 
@@ -735,6 +856,9 @@ class RayPPOTrainer:
             # collect metrics
             num_gpus = self.resource_pool_manager.get_num_gpus()
             metrics.update(compute_data_metrics(batch=batch, use_critic=self.use_critic))
+            self._log_tag_stats(batch, metrics)
+            self._update_alt_running_metrics(metrics)
+            self._maybe_log_alt_summary(metrics)
             metrics.update(compute_timing_metrics(batch=batch, timing_raw=timing_raw))
             metrics.update(compute_throughout_metrics(batch=batch, timing_raw=timing_raw, num_gpus=num_gpus))
 

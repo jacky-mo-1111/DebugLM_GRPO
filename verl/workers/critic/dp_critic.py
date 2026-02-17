@@ -37,7 +37,56 @@ from .config import CriticConfig
 try:
     from flash_attn.bert_padding import index_first_axis, pad_input, rearrange, unpad_input
 except ImportError:
-    pass
+    # Fallback implementations when flash_attn is not available
+    def unpad_input(hidden_states, attention_mask):
+        """
+        Remove padding from input based on attention mask.
+        Args:
+            hidden_states: (batch, seqlen, ...) - can have any number of trailing dims
+            attention_mask: (batch, seqlen)
+        Returns:
+            hidden_states_unpad: (total_nnz, ...)
+            indices: (total_nnz,)
+            cu_seqlens: (batch + 1,)
+            max_seqlen_in_batch: int
+        """
+        seqlens_in_batch = attention_mask.sum(dim=-1, dtype=torch.int32)
+        indices = torch.nonzero(attention_mask.flatten(), as_tuple=False).flatten()
+        max_seqlen_in_batch = seqlens_in_batch.max().item()
+        cu_seqlens = torch.nn.functional.pad(
+            torch.cumsum(seqlens_in_batch, dim=0, dtype=torch.int32), (1, 0)
+        )
+        # Flatten batch and seq dims, then index
+        hidden_states_flat = hidden_states.view(-1, *hidden_states.shape[2:])
+        hidden_states_unpad = hidden_states_flat[indices]
+        return hidden_states_unpad, indices, cu_seqlens, max_seqlen_in_batch
+
+    def pad_input(hidden_states, indices, batch, seqlen):
+        """
+        Pad hidden states back to original shape.
+        Args:
+            hidden_states: (total_nnz, ...)
+            indices: (total_nnz,)
+            batch: int
+            seqlen: int
+        Returns:
+            output: (batch, seqlen, ...)
+        """
+        output_shape = (batch * seqlen,) + hidden_states.shape[1:]
+        output = hidden_states.new_zeros(output_shape)
+        output[indices] = hidden_states
+        return output.view(batch, seqlen, *hidden_states.shape[1:])
+
+    def index_first_axis(x, indices):
+        """
+        Index into the first axis of a tensor.
+        Args:
+            x: (total, ...)
+            indices: (num_indices,)
+        Returns:
+            x[indices]: (num_indices, ...)
+        """
+        return x[indices]
 
 
 __all__ = ["DataParallelPPOCritic"]

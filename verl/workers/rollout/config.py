@@ -44,6 +44,9 @@ class RolloutConfig:
     tag_token: str = "<TAG>"
     allowed_tokens_after_tag: list[str] = field(default_factory=lambda: ["<TOFU>", "<CHATDOCTOR>", "<AEGIS>", "<BEVER>", "<WMDP>"])
     tag_sampling_epsilon: float = 0.0
+    # optional phrase trigger to force a token after <TAG>; defaults disabled
+    tag_phrase_trigger: Optional[str] = None
+    tag_force_token_if_phrase: Optional[str] = None
     # below are auto keys
     prompt_length: int = field(default=-1, init=False)
     response_length: int = field(default=-1, init=False)

@@ -18,7 +18,7 @@ import sys
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from functools import partial
-from typing import Callable, Optional, Tuple, TypedDict
+from typing import Any, Callable, Optional, Tuple, TypedDict
 
 import torch
 from transformers import PreTrainedTokenizer
@@ -76,11 +76,21 @@ class FunctionRewardManager(ABC):
         """Compute reward for a batch of data."""
         ...
 
+    def _get_reward_fn(self, override_kwargs: Optional[dict[str, Any]] = None):
+        """Return reward_fn with optional runtime overrides for kwargs."""
+        if not override_kwargs:
+            return self.reward_fn
+
+        base_kwargs = self.reward_fn.keywords or {}
+        merged_kwargs = {**base_kwargs, **override_kwargs}
+        return partial(self.reward_fn.func, **merged_kwargs)
+
 
 class SequentialFunctionRewardManager(FunctionRewardManager):
     reward_fn: SequentialRewardFunction
 
     def compute_reward(self, data: DataProto) -> Tuple[torch.Tensor, dict[str, list[float]]]:
+        reward_fn = self._get_reward_fn(data.meta_info.get("reward_kwargs_override") if hasattr(data, "meta_info") else None)
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
         reward_metrics = defaultdict(list)
         response_ids = data.batch["responses"]
@@ -91,7 +101,7 @@ class SequentialFunctionRewardManager(FunctionRewardManager):
             response_str = self.tokenizer.decode(
                 valid_response_ids, skip_special_tokens=self.config.skip_special_tokens
             )
-            score = self.reward_fn(
+            score = reward_fn(
                 {
                     "response": response_str,
                     "response_length": cur_response_length,
@@ -109,6 +119,7 @@ class BatchFunctionRewardManager(FunctionRewardManager):
     reward_fn: BatchRewardFunction
 
     def compute_reward(self, data: DataProto) -> Tuple[torch.Tensor, dict[str, list[float]]]:
+        reward_fn = self._get_reward_fn(data.meta_info.get("reward_kwargs_override") if hasattr(data, "meta_info") else None)
         reward_inputs = []
         response_ids = data.batch["responses"]
         response_length = torch.sum(data.batch["response_mask"], dim=-1)
@@ -131,7 +142,7 @@ class BatchFunctionRewardManager(FunctionRewardManager):
                 reward_input_dict["gold_tag"] = data.non_tensor_batch["gold_tag"][i]
             reward_inputs.append(reward_input_dict)
 
-        scores = self.reward_fn(reward_inputs)
+        scores = reward_fn(reward_inputs)
         reward_tensor = torch.zeros_like(data.batch["responses"], dtype=torch.float32)
         reward_metrics = defaultdict(list)
         for i, score in enumerate(scores):

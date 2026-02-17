@@ -45,14 +45,7 @@ export MKL_NUM_THREADS=1
 export NUMEXPR_NUM_THREADS=1
 export VECLIB_MAXIMUM_THREADS=1
 
-# python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_10/actor
-# python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_20/actor
-# python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_30/actor
-python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_20/actor
-# python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_30/actor
+python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/qwen3_4b_routeguard_multi_expert_oriented/global_step_30/actor
 
-
-
-
-# python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/llama38b_wmdp_grpo_with_tag/global_step_150/actor
+python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/qwen3_4b_routeguard_original_source/global_step_30/actor
 

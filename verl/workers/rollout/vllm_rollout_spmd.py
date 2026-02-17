@@ -12,7 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Force vLLM to use V0 engine (V1 does not support logits_processors)
+# Must be set BEFORE any vLLM import
 import os
+os.environ["VLLM_USE_V1"] = "0"
+os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+# Print confirmation for debugging
+print(f"[vLLM Engine] Setting VLLM_USE_V1={os.environ.get('VLLM_USE_V1')} before import")
 import random
 from contextlib import contextmanager
 from typing import Any, Optional, Union
@@ -140,33 +146,12 @@ class vLLMRollout(BaseRollout):
                 allowed_tokens=config.allowed_tokens_after_tag,
                 enabled=True,
                 epsilon=config.tag_sampling_epsilon,
+                phrase_trigger=config.tag_phrase_trigger,
+                force_token_if_phrase=config.tag_force_token_if_phrase,
             )
             if self.tag_logit_processor is not None:
                 self.tag_token_id = self.tag_logit_processor.tag_token_id
-                # Try to register logits processor with vLLM engine
-                # vLLM 0.10+ may support this via engine's logits processor list
-                try:
-                    # Access the underlying model executor to add logits processor
-                    if hasattr(self.inference_engine, 'llm_engine'):
-                        llm_engine = self.inference_engine.llm_engine
-                        # Try to add logits processor to the engine
-                        # vLLM's internal structure may vary by version
-                        if hasattr(llm_engine, 'model_executor'):
-                            model_executor = llm_engine.model_executor
-                            # Check if model_executor has logits_processors
-                            if hasattr(model_executor, 'logits_processors'):
-                                # Add our processor to the list
-                                if model_executor.logits_processors is None:
-                                    model_executor.logits_processors = []
-                                # Wrap our processor to match vLLM's interface
-                                model_executor.logits_processors.append(self.tag_logit_processor)
-                                print("Successfully registered TagLogitProcessor with vLLM engine")
-                            else:
-                                print("Warning: vLLM engine does not support logits_processors attribute")
-                                print("Tag restriction will be enforced via post-processing (less efficient)")
-                except Exception as e:
-                    print(f"Warning: Could not register logits processor with vLLM: {e}")
-                    print("Tag restriction will be enforced via post-processing (less efficient)")
+                print("TagLogitProcessor enabled: logits will be modified during generation")
 
         sampling_kwargs = {
             "max_tokens": config.response_length,
@@ -184,9 +169,7 @@ class vLLMRollout(BaseRollout):
         print(f"Sampling params: {sampling_kwargs}.")
         self.sampling_params = SamplingParams(**sampling_kwargs)
 
-    def _apply_tag_restriction_post_process(
-        self, completions: list, batch_raw_prompt_ids: list
-    ) -> list:
+    def _apply_tag_restriction_post_process(self, completions: list) -> list:
         """
         Post-process completions to enforce tag restriction.
         This is a fallback method - ideally should be done during generation via logits_processor.
@@ -200,6 +183,8 @@ class vLLMRollout(BaseRollout):
         
         tag_token_id = self.tag_logit_processor.tag_token_id
         allowed_token_ids = list(self.tag_logit_processor.allowed_token_ids)
+        phrase_token_ids = getattr(self.tag_logit_processor, "phrase_token_ids", []) or []
+        forced_token_id_if_phrase = getattr(self.tag_logit_processor, "forced_token_id_if_phrase", None)
         epsilon = getattr(self, "tag_sampling_epsilon_current", 0.0)
         
         if not allowed_token_ids:
@@ -219,11 +204,29 @@ class vLLMRollout(BaseRollout):
                 corrected = False
                 for i in range(len(token_ids) - 1):
                     if token_ids[i] == tag_token_id:
-                        # with prob epsilon, force exploration; also fix invalid token
-                        force_resample = (epsilon > 0 and random.random() < epsilon)
-                        if force_resample or (token_ids[i + 1] not in allowed_token_ids):
-                            token_ids[i + 1] = random.choice(allowed_token_ids)
-                            corrected = True
+                        def has_phrase(seq: list[int]) -> bool:
+                            if not phrase_token_ids or len(seq) < len(phrase_token_ids):
+                                return False
+                            m = len(phrase_token_ids)
+                            for j in range(len(seq) - m + 1):
+                                if seq[j : j + m] == phrase_token_ids:
+                                    return True
+                            return False
+
+                        force_token = (
+                            forced_token_id_if_phrase is not None
+                            and has_phrase(token_ids[:i])  # phrase must appear before <TAG>
+                        )
+                        if force_token:
+                            if token_ids[i + 1] != forced_token_id_if_phrase:
+                                token_ids[i + 1] = forced_token_id_if_phrase
+                                corrected = True
+                        else:
+                            # with prob epsilon, force exploration; also fix invalid token
+                            force_resample = (epsilon > 0 and random.random() < epsilon)
+                            if force_resample or (token_ids[i + 1] not in allowed_token_ids):
+                                token_ids[i + 1] = random.choice(allowed_token_ids)
+                                corrected = True
                 
                 if corrected:
                     # Try to modify the output's token_ids
@@ -311,15 +314,14 @@ class vLLMRollout(BaseRollout):
                 self.tag_sampling_epsilon_current = epsilon
                 if self.rank == 0:
                     print(f"[TagRestriction] Using epsilon={epsilon:.2f} for tag sampling")
+                # Set logits_processors for vLLM 0.6.x (modifies logits DURING generation)
+                self.sampling_params.logits_processors = [self.tag_logit_processor]
+            else:
+                self.sampling_params.logits_processors = None
+            
             completions: list[RequestOutput] = self.inference_engine.generate(
                 prompts=vllm_inputs, sampling_params=self.sampling_params, use_tqdm=self.use_tqdm
             )
-            
-            # Post-process to enforce tag restriction if enabled
-            # Note: This is a fallback - ideally should be done during generation via logits_processor
-            # For proper implementation, vLLM's logits_processor interface should be used
-            if self.tag_logit_processor is not None:
-                completions = self._apply_tag_restriction_post_process(completions, batch_raw_prompt_ids)
             response_ids = [output.token_ids for completion in completions for output in completion.outputs]
             response_ids = VF.pad_2d_list_to_length(
                 response_ids, self.pad_token_id, max_length=self.config.response_length

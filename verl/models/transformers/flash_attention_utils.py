@@ -30,14 +30,24 @@ from ...utils.ulysses import (
     get_ulysses_sequence_parallel_world_size,
 )
 
+# Allow disabling flash attention via environment variable
+DISABLE_FLASH_ATTN = os.getenv("DISABLE_FLASH_ATTN", "0") == "1"
+FLASH_ATTN_AVAILABLE = is_flash_attn_2_available() and not DISABLE_FLASH_ATTN
 
-if is_flash_attn_2_available():
-    from flash_attn import flash_attn_func, flash_attn_varlen_func
+if FLASH_ATTN_AVAILABLE:
+    try:
+        from flash_attn import flash_attn_func, flash_attn_varlen_func
 
-    _flash_supports_window_size = "window_size" in inspect.signature(flash_attn_func).parameters
-    _flash_supports_deterministic = "deterministic" in inspect.signature(flash_attn_func).parameters
-    _flash_deterministic_enabled = os.getenv("FLASH_ATTENTION_DETERMINISTIC", "0") == "1"
-    _flash_use_top_left_mask = not is_flash_attn_greater_or_equal_2_10()
+        _flash_supports_window_size = "window_size" in inspect.signature(flash_attn_func).parameters
+        _flash_supports_deterministic = "deterministic" in inspect.signature(flash_attn_func).parameters
+        _flash_deterministic_enabled = os.getenv("FLASH_ATTENTION_DETERMINISTIC", "0") == "1"
+        _flash_use_top_left_mask = not is_flash_attn_greater_or_equal_2_10()
+    except ImportError as e:
+        print(f"Warning: flash_attn import failed: {e}. Falling back to SDPA.")
+        FLASH_ATTN_AVAILABLE = False
+else:
+    if DISABLE_FLASH_ATTN:
+        print("Flash attention disabled via DISABLE_FLASH_ATTN=1")
 
 
 def prepare_fa2_from_position_ids(

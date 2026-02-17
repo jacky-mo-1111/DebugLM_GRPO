@@ -117,6 +117,7 @@ def main():
                 "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:False",
                 "CUDA_DEVICE_MAX_CONNECTIONS": "1",
                 "VLLM_ALLREDUCE_USE_SYMM_MEM": "0",
+                "VLLM_USE_V1": "0",  # Force vLLM to use V0 engine (V1 does not support logits_processors)
             }
         }
         ray.init(runtime_env=runtime_env)

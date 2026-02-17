@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Force vLLM to use V0 engine (V1 does not support logits_processors)
+# Must be set BEFORE any vLLM import
+import os
+os.environ["VLLM_USE_V1"] = "0"
+os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
+
 import inspect
 import re
 from typing import Iterable, Union
@@ -49,7 +55,7 @@ class FSDPVLLMShardingManager(BaseShardingManager):
         self.world_size = dist.get_world_size()
         self.tp_size = vllm_ps.get_tensor_model_parallel_world_size()
         self.tp_rank = vllm_ps.get_tensor_model_parallel_rank()
-        self.tp_group = vllm_ps.get_tensor_model_parallel_group().device_group
+        self.tp_group = vllm_ps.get_tp_group().device_group
 
         # Record freed bytes to estimate memory usage correctly
         # https://github.com/vllm-project/vllm/pull/11743#issuecomment-2754338119

@@ -35,6 +35,12 @@ def recursive_post_init(dataclass_obj):
 class DataConfig:
     train_files: str = ""
     val_files: str = ""
+    alt_update: bool = False
+    """alternate debug/normal updates"""
+    debug_train_files: Optional[str] = None
+    """train set that must contain only debug samples (e.g., has <DEBUG>)"""
+    normal_train_files: Optional[str] = None
+    """train set that must contain only normal samples"""
     prompt_key: str = "prompt"
     answer_key: str = "answer"
     image_key: str = "images"
@@ -109,6 +115,8 @@ class TrainerConfig:
     """total epochs for training"""
     max_steps: Optional[int] = None
     """max steps for training, if specified, total_epochs is ignored"""
+    alt_update_summary_interval: int = 20
+    """steps between alt-update summaries; <=0 disables"""
     project_name: str = "easy_r1"
     """project name for logger"""
     experiment_name: str = "demo"

@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=0
-#SBATCH --time=24:00:00
+#SBATCH --time=8:00:00
 #SBATCH --output=logs/%j.log
 #SBATCH --error=logs/%j.log
 
@@ -34,8 +34,9 @@ cd /data/wenjie_jacky_mo/EasyR1
 # python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/qwen2_5_vl_7b_geo_grpo/global_step_60/actor
 
 
-bash examples/qwen3_8b_wmdp.sh
-bash examples/llama3_8b_wmdp.sh
+bash examples/qwen3_4b_routeguard_original_source.sh
+# bash examples/qwen3_8b_wmdp_with_tag.sh
+
 
 
 

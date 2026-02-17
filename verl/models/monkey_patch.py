@@ -12,10 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+
 from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
 
 from ..utils.py_functional import is_transformers_version_greater_than
-from .transformers.flash_attention_utils import flash_attention_forward
+
+# Conditionally import flash_attention_forward
+DISABLE_FLASH_ATTN = os.getenv("DISABLE_FLASH_ATTN", "0") == "1"
+if not DISABLE_FLASH_ATTN:
+    try:
+        from .transformers.flash_attention_utils import flash_attention_forward, FLASH_ATTN_AVAILABLE
+    except ImportError:
+        FLASH_ATTN_AVAILABLE = False
+        flash_attention_forward = None
+else:
+    FLASH_ATTN_AVAILABLE = False
+    flash_attention_forward = None
+    print("Flash attention disabled via DISABLE_FLASH_ATTN=1, using default attention.")
 
 
 SUPPORTED_MODEL_TYPE = (
@@ -42,7 +56,10 @@ def apply_ulysses_patch(model_type: str) -> None:
         raise RuntimeError("Only support transformers >= 4.54.0.")
 
     if model_type in SUPPORTED_MODEL_TYPE:
-        ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = flash_attention_forward
+        if flash_attention_forward is not None:
+            ALL_ATTENTION_FUNCTIONS["flash_attention_2"] = flash_attention_forward
+        else:
+            print(f"Warning: flash_attention_forward not available, skipping ulysses patch for attention.")
     else:
         raise NotImplementedError(f"Model architecture {model_type} is not supported yet.")
 

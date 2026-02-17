@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=multimodal_stimulli
+#SBATCH --job-name=compute_utilities
 #SBATCH --partition=cais
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:8
+#SBATCH --gres=gpu:4
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=0
-#SBATCH --time=8:00:00
+#SBATCH --time=12:00:00
 #SBATCH --output=logs/%j.log
 #SBATCH --error=logs/%j.log
 
@@ -26,6 +26,10 @@ fi
 export WANDB_DISABLED=true
 export TRANSFORMERS_NO_ADVISORY_WARNINGS=1
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+# Set to 1 to disable flash attention (useful if flash-attn is not installed or broken)
+export DISABLE_FLASH_ATTN=1
+# Force vLLM to use V0 engine (V1 does not support logits_processors)
+export VLLM_USE_V1=0
 
 # Change to the LLaMA-Factory directory
 cd /data/wenjie_jacky_mo/EasyR1
@@ -34,8 +38,8 @@ cd /data/wenjie_jacky_mo/EasyR1
 # python3 scripts/model_merger.py --local_dir /data/wenjie_jacky_mo/EasyR1/checkpoints/easy_r1/qwen2_5_vl_7b_geo_grpo/global_step_60/actor
 
 
-bash examples/llama3_8b_wmdp_with_tag.sh
-# bash examples/qwen3_8b_wmdp_with_tag.sh
+# bash examples/llama3_8b_wmdp_with_tag.sh
+bash examples/qwen3_4b_routeguard_grpo.sh
 
 
 

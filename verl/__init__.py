@@ -12,7 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Force vLLM to use V0 engine (V1 does not support logits_processors)
+# This MUST be set before any vLLM import happens anywhere in the codebase
 import os
+os.environ["VLLM_USE_V1"] = "0"
+os.environ["VLLM_ENABLE_V1_MULTIPROCESSING"] = "0"
 
 from .utils.py_functional import is_package_available
 

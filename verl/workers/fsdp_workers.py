@@ -15,6 +15,7 @@
 The main entry point to run the PPO algorithm
 """
 
+import os
 from typing import Literal, Optional, Union, cast
 
 import numpy as np
@@ -36,7 +37,12 @@ from transformers import (
 )
 from transformers.modeling_utils import no_init_weights
 
-from ..models.monkey_patch import apply_ulysses_patch
+from ..models.monkey_patch import apply_ulysses_patch, FLASH_ATTN_AVAILABLE
+
+# Determine attention implementation based on flash attention availability
+ATTN_IMPLEMENTATION = "flash_attention_2" if FLASH_ATTN_AVAILABLE else "sdpa"
+if not FLASH_ATTN_AVAILABLE:
+    print(f"Using attention implementation: {ATTN_IMPLEMENTATION}")
 from ..protocol import DataProto
 from ..single_controller.base import Worker
 from ..single_controller.base.decorator import Dispatch, register
@@ -202,7 +208,7 @@ class FSDPWorker(Worker):
                 model_config.model_path,
                 config=self.model_config,
                 torch_dtype=torch_dtype,
-                attn_implementation="flash_attention_2",
+                attn_implementation=ATTN_IMPLEMENTATION,
                 device_map="cpu" if fsdp_config.enable_rank0_init else "cuda",
                 low_cpu_mem_usage=True,
                 trust_remote_code=model_config.trust_remote_code,
@@ -212,7 +218,7 @@ class FSDPWorker(Worker):
                 model = AutoClass.from_config(
                     self.model_config,
                     torch_dtype=torch_dtype,
-                    attn_implementation="flash_attention_2",
+                    attn_implementation=ATTN_IMPLEMENTATION,
                     trust_remote_code=model_config.trust_remote_code,
                 )
 
